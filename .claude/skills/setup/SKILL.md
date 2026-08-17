@@ -1,6 +1,6 @@
 ---
-name: start
-description: Set up claude-session-refresh, or change which hours it fires at. Covers repo visibility, timezone and target hours, the cron schedule, the OAuth token secret, the first run, and the /usage proof. Use when the user runs /start in this repo, asks how to set this project up, wants to change or move the refresh times, add or drop a window, switch timezone, or asks why its scheduled runs are not working.
+name: setup
+description: Set up claude-session-refresh, or change which hours it fires at. Covers repo visibility, timezone and target hours, the cron schedule, the OAuth token secret, the first run, and the /usage proof. Use when the user runs /setup in this repo, asks how to set this project up, wants to change or move the refresh times, add or drop a window, switch timezone, or asks why its scheduled runs are not working.
 ---
 
 You are setting up **claude-session-refresh** for the user. The project opens a Claude Code
@@ -37,7 +37,7 @@ gh secret list
 gh workflow list
 git branch --show-current
 git log --oneline -3
-python3 .claude/skills/start/schedule.py --show
+python3 .claude/skills/setup/schedule.py --show
 ls log/ 2>/dev/null
 ```
 
@@ -107,14 +107,14 @@ entries, the job's `TZ` / `TARGET_HOURS`, and the season guard's `case` — and 
 four right produces a workflow that looks correct and silently never fires:
 
 ```bash
-python3 .claude/skills/start/schedule.py <IANA_TZ> --apply [hours...]
+python3 .claude/skills/setup/schedule.py <IANA_TZ> --apply [hours...]
 ```
 
 It refuses to write unless the result comes out self-consistent, so a failure leaves the file
 untouched. Confirm afterwards, and check the workflow still parses:
 
 ```bash
-python3 .claude/skills/start/schedule.py --show
+python3 .claude/skills/setup/schedule.py --show
 ruby -ryaml -e 'YAML.load_file(".github/workflows/refresh.yml"); puts "YAML ok"'
 ```
 
@@ -178,7 +178,7 @@ A manual dispatch only pings inside the band around a target (60 minutes late to
 early). Outside it, the run exits clean and proves nothing about the token. Check first:
 
 ```bash
-python3 .claude/skills/start/schedule.py <IANA_TZ> --check [hours...]
+python3 .claude/skills/setup/schedule.py <IANA_TZ> --check [hours...]
 ```
 
 If it says nothing would happen, tell the user when the next usable slot opens and offer to run
@@ -289,7 +289,7 @@ starts working and when they are supposed to look at it. Get them from the scrip
 doing the arithmetic yourself:
 
 ```bash
-python3 .claude/skills/start/schedule.py <IANA_TZ> --plan [hours...]
+python3 .claude/skills/setup/schedule.py <IANA_TZ> --plan [hours...]
 ```
 
 It prints the upcoming windows with their cron times, whether the next cron is far enough out to

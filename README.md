@@ -13,7 +13,7 @@ a detail**.
 
 ## Quick start
 
-**Using Claude Code?** Run `/start` in this repo and it walks you through everything below,
+**Using Claude Code?** Run `/setup` in this repo and it walks you through everything below,
 checking as it goes what is already done. It also computes the cron entries for your timezone,
 which is the one step that is easy to get wrong by hand.
 
@@ -32,17 +32,23 @@ Otherwise, by hand:
 │     `gh secret set` reads the value from stdin, so it never lands in     │
 │     your shell history. Never paste the token anywhere else.             │
 │                                                                          │
-│  3. Set your timezone: edit `TZ` and `TARGET_HOURS` in                   │
-│     `.github/workflows/refresh.yml` (see "Changing the schedule").       │
+│  3. Set your timezone and hours (defaults: Europe/Rome, 8/13/18/23).     │
+│     The helper rewrites all four coupled places at once:                 │
 │                                                                          │
-│  4. Make sure the workflow is on your default branch, then fire the      │
-│     first run by hand — GitHub takes up to an hour to register a new     │
-│     schedule:                                                            │
+│        python3 .claude/skills/setup/schedule.py <TZ> --apply 8 13 18 23  │
+│                                                                          │
+│     Check it any time with `--show`, which also flags drift.             │
+│                                                                          │
+│  4. Get the workflow onto your default branch. A cron due within the     │
+│     hour after that may be missed — GitHub takes up to an hour to        │
+│     register a new schedule — but the next one fires normally.           │
+│                                                                          │
+│     Don't want to wait? Dispatch it:                                     │
 │                                                                          │
 │        gh workflow run refresh.yml                                       │
 │                                                                          │
-│     It only pings within -60/+45 minutes of a target hour; outside that  │
-│     range it exits cleanly.                                              │
+│     It only pings within -60/+45 min of a target hour, and it opens a    │
+│     real window — which spends the clean slate step 5 needs.             │
 │                                                                          │
 │  5. Verify — and mind the trap. The trigger opens a window only when     │
 │     none is open, and your own sessions open one too, including the      │
@@ -115,8 +121,8 @@ entries are required:
 ```yaml
 on:
   schedule:
-    - cron: '30 6,11,16,21 * * *'   # winter CET  (UTC+1) -> 7:30/12:30/17:30/22:30 local
-    - cron: '30 5,10,15,20 * * *'   # summer CEST (UTC+2) -> same local times
+    - cron: '30 6,11,16,21 * * *'   # UTC+0100 -> 7:30/12:30/17:30/22:30 local
+    - cron: '30 5,10,15,20 * * *'   # UTC+0200 -> 7:30/12:30/17:30/22:30 local
   workflow_dispatch:
 ```
 
@@ -126,7 +132,8 @@ not enough to discard them. In summer the winter entry fires at 8:30 local, and 
 It would look like a delayed run, and it would ping.
 
 So the workflow compares `github.event.schedule` (the cron entry that triggered this run)
-against the current UTC offset of `Europe/Rome`, and exits immediately when they disagree.
+against the current UTC offset of your configured `TZ`, and exits immediately when they
+disagree.
 Manual runs (`workflow_dispatch`) skip the check.
 
 ### The log
@@ -162,8 +169,8 @@ Let the helper apply it. The UTC conversion plus DST is exactly where hand-editi
 and there are four coupled places to update:
 
 ```bash
-python3 .claude/skills/start/schedule.py --show                          # what is configured now
-python3 .claude/skills/start/schedule.py America/New_York --apply 8 13 18 23
+python3 .claude/skills/setup/schedule.py --show                          # what is configured now
+python3 .claude/skills/setup/schedule.py America/New_York --apply 8 13 18 23
 ```
 
 `--apply` rewrites all four and refuses to write unless the result is self-consistent, so a

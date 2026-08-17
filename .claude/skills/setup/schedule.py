@@ -2,13 +2,13 @@
 """Compute the cron entries and season-guard arms for a given timezone.
 
 Usage (run from the repo root):
-  python3 .claude/skills/start/schedule.py --show
-  python3 .claude/skills/start/schedule.py <IANA_TZ> --apply [target_hour ...]
-  python3 .claude/skills/start/schedule.py <IANA_TZ> [target_hour ...]
-  python3 .claude/skills/start/schedule.py <IANA_TZ> --check [target_hour ...]
-  python3 .claude/skills/start/schedule.py <IANA_TZ> --plan  [target_hour ...]
+  python3 .claude/skills/setup/schedule.py --show
+  python3 .claude/skills/setup/schedule.py <IANA_TZ> --apply [target_hour ...]
+  python3 .claude/skills/setup/schedule.py <IANA_TZ> [target_hour ...]
+  python3 .claude/skills/setup/schedule.py <IANA_TZ> --check [target_hour ...]
+  python3 .claude/skills/setup/schedule.py <IANA_TZ> --plan  [target_hour ...]
 
-Example: python3 .claude/skills/start/schedule.py America/New_York --apply 8 13 18 23
+Example: python3 .claude/skills/setup/schedule.py America/New_York --apply 8 13 18 23
 
 --show reads the schedule out of the workflow and checks that its four places
 still agree: TZ, TARGET_HOURS, the cron entries and the season-guard arms.
