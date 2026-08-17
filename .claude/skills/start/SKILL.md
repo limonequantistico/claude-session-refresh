@@ -121,9 +121,13 @@ Check where things stand with `git branch --show-current` and
 `git log --oneline origin/<default>..HEAD`, then tell the user what is needed — merge the branch,
 or push it and open a PR. Ask before pushing or opening anything.
 
-Also tell them: **GitHub takes up to an hour to register a new schedule**, so the first run has
-to be a manual dispatch regardless. That is what "by hand" means here — dispatch instead of
-waiting for cron. You can fire it yourself; it does not need to be the user.
+Also tell them: **GitHub takes up to an hour to register a new schedule.** This does not mean the
+first run must be manual — it means a cron due within the next hour of the merge may be missed,
+and the one after it will fire normally. `--plan` in Phase 7 says which case they are in.
+
+A manual dispatch is therefore a choice, not a requirement, and it is not free: see the gate in
+Phase 5. If the merge lands comfortably before the next cron, letting the schedule fire on its
+own is the better path — it costs nothing and it keeps Phase 6 testable.
 
 ## Phase 5 — the first run
 
@@ -142,7 +146,22 @@ python3 .claude/skills/start/schedule.py <IANA_TZ> --check [hours...]
 If it says nothing would happen, tell the user when the next usable slot opens and offer to run
 it then — do not fire a dispatch that cannot ping and then call the setup verified.
 
-When the slot is open:
+**Ask before dispatching. Always, even when the slot is open.** This is not a read-only
+command: it opens a real usage window, and that has a cost the user may not want to pay right
+now. Put the decision in front of them in one short block:
+
+- the exact local time the job would ping, and the window it would open (`--check` prints both);
+- that this **spends the clean slate** — the window it opens runs for 5 hours, so every target
+  inside those 5 hours becomes untestable per Phase 6;
+- the alternative: skip the dispatch and let the first scheduled cron do it, which costs a wait
+  but keeps the verification clean.
+
+Recommend skipping the dispatch when the token is already confirmed present and the next
+scheduled run is close: the dispatch mostly proves the plumbing, and Phase 6 is the claim that
+actually matters. Recommend dispatching when the token has just been set and the user wants to
+know now whether authentication works at all.
+
+Once they say yes:
 
 ```bash
 gh workflow run refresh.yml
@@ -224,6 +243,39 @@ guessing.
 Only when a test that met all three conditions comes back with an unrelated reset does the
 premise of the project actually fail. **Then** stop and say so — do not paper over it or move on
 to tuning.
+
+## Phase 7 — the handover
+
+Do not end on "now wait". End on **dates and times**, so the user knows exactly when the thing
+starts working and when they are supposed to look at it. Get them from the script rather than
+doing the arithmetic yourself:
+
+```bash
+python3 .claude/skills/start/schedule.py <IANA_TZ> --plan [hours...]
+```
+
+It prints the upcoming windows with their cron times, whether the next cron is far enough out to
+have been registered, and the first target that can serve as a valid `/usage` test given that
+**this session is itself usage** and holds a window open for the next 5 hours.
+
+Close with a handover that answers four questions, in this order:
+
+1. **When does the first automatic run fire?** The cron time, not the target — and whether it is
+   more than an hour away, because a schedule that just landed on the default branch may not be
+   registered yet.
+2. **When does the first window open, and what does it cover?** e.g. "08:00 → 13:00, then 13:00,
+   18:00, 23:00 from then on, every day."
+3. **When should the user check, and what exactly should they see?** The target from `--plan`,
+   and the reset time it must show, on the round hour.
+4. **What must they not do in the meantime?** The quiet stretch: no Claude Code — including
+   asking you to check on it — between the end of the current window and that target. This is
+   the instruction most likely to be broken by accident, so make it the last thing you say.
+
+Add the honest caveat that until step 3 comes back clean, the project is *installed*, not
+*proven*.
+
+If `--plan` warns that the clearance is thin, say so and point at the later target instead. Do
+not talk the user into a test that a two-minute follow-up question would invalidate.
 
 ## Troubleshooting
 

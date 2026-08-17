@@ -4,6 +4,7 @@
 Usage:
   python3 .claude/skills/start/schedule.py <IANA_TZ> [target_hour ...]
   python3 .claude/skills/start/schedule.py <IANA_TZ> --check [target_hour ...]
+  python3 .claude/skills/start/schedule.py <IANA_TZ> --plan  [target_hour ...]
 
 Example: python3 .claude/skills/start/schedule.py America/New_York 8 13 18 23
 
@@ -14,6 +15,10 @@ converted to UTC — one set per UTC offset the timezone uses during the year.
 --check answers a different question: would `gh workflow run refresh.yml` right
 now actually ping, or would it exit clean? A manual run only does something
 inside the -LATE_S/+EARLY_S band around a target.
+
+--plan is the handover: when the next cron fires, the upcoming windows, and the
+first target that can serve as a valid /usage test given that the current
+session is itself usage and has a window open for the next 5 hours.
 """
 
 import sys
@@ -31,6 +36,80 @@ def offset_label(off: timedelta) -> str:
     total = int(off.total_seconds())
     sign = "+" if total >= 0 else "-"
     return f"{sign}{abs(total) // 3600:02d}{abs(total) % 3600 // 60:02d}"
+
+
+def upcoming(now: datetime, targets: list[int], count: int) -> list[datetime]:
+    """The next `count` target instants, in order, starting after `now`."""
+    out = []
+    day = 0
+    while len(out) < count:
+        for hour in sorted(targets):
+            t = (now + timedelta(days=day)).replace(
+                hour=hour, minute=0, second=0, microsecond=0
+            )
+            if t > now:
+                out.append(t)
+        day += 1
+    return sorted(out)[:count]
+
+
+def plan(zone: ZoneInfo, tz_name: str, targets: list[int]) -> int:
+    """Print the handover timeline: when it fires, when it is live, when to verify."""
+    now = datetime.now(zone)
+    print(f"Local time in {tz_name}: {now:%F %H:%M %Z}\n")
+
+    slots = upcoming(now, targets, len(targets) + 1)
+
+    print("Upcoming windows")
+    for t in slots[: len(targets)]:
+        cron = t - timedelta(minutes=HEAD_START_MIN)
+        expiry = t + timedelta(hours=WINDOW_H)
+        print(f"  {t:%a %H:%M} → {expiry:%H:%M}   (cron fires {cron:%H:%M})")
+
+    print()
+    if slots[0] - timedelta(minutes=HEAD_START_MIN) <= now:
+        print(f"The cron for the {slots[0]:%H:%M} window already fired at")
+        print(f"{slots[0] - timedelta(minutes=HEAD_START_MIN):%H:%M}: if the schedule was registered by then that job")
+        print("is sleeping right now, otherwise that window was missed.")
+        nxt = slots[1]
+    else:
+        nxt = slots[0]
+
+    next_cron = nxt - timedelta(minutes=HEAD_START_MIN)
+    lead = (next_cron - now).total_seconds() / 60
+    if lead < 60:
+        print(f"The next cron fires at {next_cron:%H:%M}, only {int(lead)} min from now.")
+        print("GitHub takes up to an hour to register a new schedule, so if the workflow")
+        print("just landed on the default branch that run may not happen — the")
+        print(f"{slots[slots.index(nxt) + 1]:%H:%M} window would then be the first automatic one.")
+    else:
+        print(f"The next cron fires at {next_cron:%H:%M}, {int(lead // 60)}h {int(lead % 60)}m from now —")
+        print("comfortably past the hour GitHub needs to register a new schedule.")
+
+    # Verification: this session is usage, so a window is open until now + 5h.
+    open_until = now + timedelta(hours=WINDOW_H)
+    valid = next((t for t in slots if t >= open_until), None)
+    print("\nFirst target that can serve as a valid test")
+    print(f"  This session counts as usage, so a window is open until ~{open_until:%H:%M}.")
+    if valid is None:
+        print("  No upcoming target clears it. Re-run --plan later.")
+        return 0
+    gap = (valid - now).total_seconds() / 60
+    print(f"  The first target on a clean slate is {valid:%a %H:%M}, in {int(gap // 60)}h {int(gap % 60)}m.")
+    print(f"  Do not use Claude Code between ~{open_until:%H:%M} and {valid:%H:%M}, or the")
+    print("  window gets anchored by you and the test means nothing.")
+    print(f"  After {valid:%H:%M}, run /usage: the reset must read "
+          f"{valid + timedelta(hours=WINDOW_H):%H:%M}, on the round hour.")
+
+    clearance = (valid - open_until).total_seconds() / 60
+    if clearance < 30:
+        later = next((t for t in slots if t > valid), None)
+        print(f"\n  Careful: that clears the open window by only {int(clearance)} min, and the")
+        print("  window moves with your last message — a few more minutes of this session")
+        print("  and the target falls back inside it.")
+        if later is not None:
+            print(f"  The {later:%a %H:%M} target is the safer one to test on.")
+    return 0
 
 
 def check_now(zone: ZoneInfo, tz_name: str, targets: list[int]) -> int:
@@ -81,7 +160,8 @@ def main() -> int:
     tz_name = sys.argv[1]
     args = sys.argv[2:]
     check = "--check" in args
-    targets = [int(h) for h in args if h != "--check"] or [8, 13, 18, 23]
+    want_plan = "--plan" in args
+    targets = [int(h) for h in args if not h.startswith("--")] or [8, 13, 18, 23]
 
     try:
         zone = ZoneInfo(tz_name)
@@ -101,6 +181,9 @@ def main() -> int:
 
     if check:
         return check_now(zone, tz_name, targets)
+
+    if want_plan:
+        return plan(zone, tz_name, targets)
 
     for a, b in zip(sorted(targets), sorted(targets)[1:]):
         if b - a < 5:
