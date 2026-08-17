@@ -44,9 +44,13 @@ Otherwise, by hand:
 │     It only pings within -60/+45 minutes of a target hour; outside that  │
 │     range it exits cleanly.                                              │
 │                                                                          │
-│  5. Right after a green run, open Claude Code locally and run `/usage`.  │
-│     The reset time must be ~5 hours after the run. If it isn't, the      │
-│     ping did not open a window — stop here, nothing else will work.      │
+│  5. Verify — and mind the trap. The trigger opens a window only when     │
+│     none is open, and your own sessions open one too, including the      │
+│     one you set this up in. So test on a target at least 5 hours after   │
+│     your last message, typically the morning one before you touch        │
+│     anything, then run `/usage` in Claude Code. Reset must land on       │
+│     target+5h, on the round hour. A ragged time means your own           │
+│     activity anchored that window: inconclusive, not broken.             │
 └──────────────────────────────────────────────────────────────────────────┘
 ```
 

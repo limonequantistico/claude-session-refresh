@@ -127,6 +127,11 @@ waiting for cron. You can fire it yourself; it does not need to be the user.
 
 ## Phase 5 — the first run
 
+This phase proves the **plumbing**: authentication, target resolution, the ping, the log commit.
+It does not prove the window moved — that is Phase 6, and it needs conditions this run almost
+certainly does not meet. Do not conflate the two, and do not let a green run here stand in for
+the verification.
+
 A manual dispatch only pings inside the band around a target (60 minutes late to 45 minutes
 early). Outside it, the run exits clean and proves nothing about the token. Check first:
 
@@ -162,25 +167,69 @@ A green run should have added a line like:
 
 ## Phase 6 — the proof that matters
 
-Everything above only proves the job ran. It does not prove the ping moved the usage window.
-Ask the user to do this themselves, in their local Claude Code, right after a green run:
+Everything above only proves the job ran. It does not prove the ping *moved the usage window*.
+That is a different claim and it needs a different setup — most attempts at it are confounded.
+
+### Why the obvious test does not work
+
+The trigger opens a window **only when none is already open**. So if any window is open when the
+ping fires, the ping correctly does nothing and `/usage` shows a reset that has nothing to do
+with the run. That is the design working, not a failure.
+
+And a window is almost always open, because **the user's own Claude Code sessions open one** —
+including the session running this very skill. Setting the project up is itself usage. So the
+naive test ("dispatch a run, then check `/usage`") is not just unreliable, it is *systematically*
+wrong: it will nearly always show an unrelated reset, on a project that is working perfectly.
+
+Never conclude from a confounded test. An unrelated reset time means **inconclusive**, not
+broken.
+
+### The conditions for a valid test
+
+All three must hold:
+
+1. **No window open when the ping fires.** The user's last Claude Code message — including the
+   setup session — must be more than 5 hours before the target. Ask them when they last used it;
+   do not assume.
+2. **No usage between that point and the target.** Opening Claude Code and sending anything
+   before the target re-anchors the window and ruins the run.
+3. **A green run at that target**, confirmed from `log/` or the run summary.
+
+In practice the natural candidate is the **first morning target**, checked before touching
+anything else. Setting up late at night works well: a session ending at 00:15 leaves a window
+that expires at 05:15, so the 08:00 ping lands on a clean slate.
+
+This means the verification usually **cannot happen in the same sitting as the setup**. Say so
+plainly rather than running a test that cannot mean anything.
+
+### Reading the result
+
+After a valid run, the user opens Claude Code and runs `/usage`:
 
 ```
 /usage
 ```
 
-The reset time must be **~5 hours after the run's ping time**. If it shows a reset that has
-nothing to do with the run, then the ping did not open a window and the premise of the whole
-project does not hold. **Stop there and say so** — do not paper over it or move on to tuning.
+- **Reset at exactly target + 5 hours, on the round hour** (08:00 ping → 13:00) — the ping
+  anchored the window. The project works.
+- **Reset at a ragged time** (12:37) — that window was anchored by a human message, not by the
+  ping. Conditions 1 or 2 were not met. Inconclusive: retest.
+- **Reset at target + 5h but the conditions were not met** — still inconclusive, just lucky.
 
-One caveat to mention: if the user had already been using Claude Code in the hours before the
-target, a window was already open and the ping correctly did nothing. That is a property of the
-design, not a failure. Re-test at a target hour that follows a quiet stretch.
+The round hour is the signature worth pointing at: a human's first message never lands at
+:00:0x, the ping always does. If `/usage` in the user's version displays only a coarse time and
+you cannot tell a round reset from a ragged one, say that the test is not decisive rather than
+guessing.
+
+Only when a test that met all three conditions comes back with an unrelated reset does the
+premise of the project actually fail. **Then** stop and say so — do not paper over it or move on
+to tuning.
 
 ## Troubleshooting
 
 | Symptom | Cause | Fix |
 |---|---|---|
+| `/usage` shows a reset unrelated to the run | a window was already open when the ping fired — usually one of the user's own sessions, possibly the setup session itself | inconclusive, **not** a failure; retest under the Phase 6 conditions |
 | Ping step fails on authentication | token expired, wrong secret name, or secret never set | user re-runs `claude setup-token` + `gh secret set`; confirm the name is exactly `CLAUDE_CODE_OAUTH_TOKEN` |
 | Run is green but no ping, summary says "no nearby target" | dispatched outside the band | re-run inside a slot, use `--check` |
 | Run is green but no ping, summary says "out-of-season cron" | correct behaviour — the other cron entry handles this season | nothing to fix |
