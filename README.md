@@ -154,26 +154,42 @@ Nothing else changes — the workflow always reads `secrets.CLAUDE_CODE_OAUTH_TO
 
 ## Changing the schedule
 
-Let the helper compute it — the UTC conversion plus DST is exactly where hand-editing goes
-wrong:
+Nothing about `8 13 18 23` is special — they are the hours the windows *start*, so `8 13 18 23`
+gives `8–13`, `13–18`, `18–23`, `23–04`. Pick the hours you actually want to start working, and
+use as few as you like: `8 13` is a perfectly good schedule if you only work mornings.
+
+Let the helper apply it. The UTC conversion plus DST is exactly where hand-editing goes wrong,
+and there are four coupled places to update:
 
 ```bash
-python3 .claude/skills/start/schedule.py America/New_York 8 13 18 23
+python3 .claude/skills/start/schedule.py --show                          # what is configured now
+python3 .claude/skills/start/schedule.py America/New_York --apply 8 13 18 23
 ```
 
-It prints the three blocks to paste, and refuses target hours that the workflow cannot handle.
-For reference, the times live in more than one place and must be kept in sync:
+`--apply` rewrites all four and refuses to write unless the result is self-consistent, so a
+failure leaves the file untouched. Drop `--apply` to print the blocks and paste them yourself.
+`--show` also works as a drift check: it exits non-zero if the four places disagree, and it is
+the only thing that catches a cron entry with no matching guard arm — an entry that looks fine
+and silently exits early on every single run.
+
+Two rules the script enforces: targets must be **01:00 or later** (a 00:00 target puts the cron
+on the previous local day, which the lookup does not handle), and targets closer than 5 hours
+overlap, so the second ping does nothing.
+
+Changing a live schedule takes effect only once it reaches the default branch, and a job that is
+already sleeping keeps its old target — the new times start from the next cron.
+
+For reference, the four places, if you would rather do it by hand:
 
 1. `TZ` and `TARGET_HOURS` in the job's `env` — your timezone and the local target hours
    (`8 13 18 23`);
-2. the two `cron` entries, which must be **30 minutes before** each target: one set for your
-   winter UTC offset, one for your summer offset (a single entry is enough if your timezone has
-   no DST);
-3. the cron strings inside the season guard (`expected=`), which are compared literally — if you
-   change the `cron` entries, change these too.
-
-Keep in mind that windows last 5 hours: targets closer together than that overlap, and the extra
-pings do nothing.
+2. the `cron` entries, which must be **30 minutes before** each target: one set for your winter
+   UTC offset, one for your summer offset (a single entry is enough if your timezone has no
+   DST);
+3. the cron strings inside the season guard (`expected=`), compared literally — if you change
+   the `cron` entries, change these too, or the unguarded entry exits early on every run;
+4. the headline comment at the top of the file, which restates the schedule in prose and is the
+   first thing to go stale.
 
 ## Widening the buffer
 

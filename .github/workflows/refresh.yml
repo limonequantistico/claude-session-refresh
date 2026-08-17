@@ -11,8 +11,8 @@ name: refresh
 
 on:
   schedule:
-    - cron: '30 6,11,16,21 * * *'   # winter CET  (UTC+1) -> 7:30/12:30/17:30/22:30 local
-    - cron: '30 5,10,15,20 * * *'   # summer CEST (UTC+2) -> same local times
+    - cron: '30 6,11,16,21 * * *'   # UTC+0100 -> 7:30/12:30/17:30/22:30 local
+    - cron: '30 5,10,15,20 * * *'   # UTC+0200 -> 7:30/12:30/17:30/22:30 local
   workflow_dispatch:
 
 permissions:
@@ -47,7 +47,7 @@ jobs:
           # --- Season guard ----------------------------------------------------
           # Half the cron entries must do nothing, depending on the season.
           # github.event.schedule tells which entry triggered this run; compare it
-          # against the current UTC offset of Europe/Rome.
+          # against the current UTC offset of the configured TZ.
           offset=$(date +%z)
           case "$offset" in
             +0100) expected='30 6,11,16,21 * * *' ;;

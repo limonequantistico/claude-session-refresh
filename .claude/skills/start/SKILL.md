@@ -1,6 +1,6 @@
 ---
 name: start
-description: Walk the user through the one-time setup of claude-session-refresh — repo visibility, timezone and cron schedule, the OAuth token secret, the first manual run, and the /usage proof. Use when the user runs /start in this repo, or asks how to set this project up, configure its schedule, or why its scheduled runs are not working.
+description: Set up claude-session-refresh, or change which hours it fires at. Covers repo visibility, timezone and target hours, the cron schedule, the OAuth token secret, the first run, and the /usage proof. Use when the user runs /start in this repo, asks how to set this project up, wants to change or move the refresh times, add or drop a window, switch timezone, or asks why its scheduled runs are not working.
 ---
 
 You are setting up **claude-session-refresh** for the user. The project opens a Claude Code
@@ -9,6 +9,11 @@ usage window at fixed local times by running the `claude` CLI from GitHub Action
 
 The setup is idempotent. Always run Phase 0 first and **skip whatever is already done** — do not
 re-run steps that are green, and do not re-ask questions the repo already answers.
+
+**Two entry points.** If the user is setting the project up, walk all the phases in order. If the
+project already works and they only want **different hours or a different timezone** — moving a
+window, adding one, dropping one, moving abroad — that is Phase 2 plus Phase 7, and nothing
+else. Do not drag them back through the token or the visibility check to change a number.
 
 ## Hard rules
 
@@ -32,7 +37,7 @@ gh secret list
 gh workflow list
 git branch --show-current
 git log --oneline -3
-grep -nE "TZ:|TARGET_HOURS:|cron:|expected=" .github/workflows/refresh.yml
+python3 .claude/skills/start/schedule.py --show
 ls log/ 2>/dev/null
 ```
 
@@ -44,8 +49,12 @@ What each one tells you:
 | `visibility` | `PUBLIC` — Actions minutes are free and unlimited |
 | `gh secret list` | `CLAUDE_CODE_OAUTH_TOKEN` exists |
 | `gh workflow list` | `refresh` is registered, i.e. the workflow is on the default branch |
-| `TZ:` / `cron:` | the schedule matches the user's actual timezone |
+| `--show` | the schedule is self-consistent, and its TZ and hours are the ones the user actually wants |
 | `ls log/` | at least one run has already succeeded |
+
+`--show` exits non-zero when the four places the schedule lives have drifted apart. Its most
+important finding is a cron entry with **no matching guard arm**: that entry is not broken in any
+visible way, it just exits early on every run, forever. Nothing else reports that.
 
 Then work through the phases below, doing only the ones that are not green.
 
@@ -63,37 +72,66 @@ Making a repo public is irreversible in practice (it can be indexed and forked w
 gh repo edit --visibility public --accept-visibility-change-consequences
 ```
 
-## Phase 2 — timezone and schedule
+## Phase 2 — timezone and target hours
 
-The repo ships with `Europe/Rome` and targets `8 13 18 23`. If that is not the user's timezone,
-ask for their IANA timezone and which local hours they want, then compute the new values — do
-**not** work out the UTC cron by hand:
+This is both a setup step and the way to **change the hours later**. The repo ships with
+`Europe/Rome` and targets `8 13 18 23`; nothing about those numbers is special.
 
-```bash
-python3 .claude/skills/start/schedule.py <IANA_TZ> [hours...]
-```
+### Agreeing on the hours
 
-It prints three blocks to apply to `.github/workflows/refresh.yml`: the `on:` schedule, the
-job's `TZ` / `TARGET_HOURS`, and the season guard's `case`. **All three must be edited
-together.** The guard compares `github.event.schedule` against the literal cron strings, so a
-cron entry that is not in the `case` silently stops matching and that run exits early.
+Show the user what is configured now (`--show`) and ask what they want instead. Useful things to
+tell them while they decide:
 
-Things the script already enforces, worth repeating if the user pushes back:
+- **Each target anchors a 5-hour window**, so the hours are the *starts*: `8 13 18 23` gives
+  `8–13`, `13–18`, `18–23`, `23–04`.
+- **Four targets 5 hours apart tile the day with no overlap and no gap** except the one you
+  choose to leave. The stock layout leaves 04:00–08:00 unanchored on purpose, because nobody
+  needs the night pinned.
+- **Fewer targets is a legitimate choice.** Someone who only works mornings can run `8 13` and
+  leave the rest alone; the unanchored hours simply behave the way Claude Code does by default.
+- **They should be the hours the user wants to *start* working**, not round numbers for their own
+  sake. The whole value is knowing the boundary in advance.
+
+The script rejects or warns about the rest:
 
 - **Targets must be 01:00 or later.** A 00:00 target puts the cron on the previous local day,
-  and the workflow's `date -d "today H:00"` lookup does not handle that.
-- **Targets closer than 5 hours are pointless.** Windows last 5 hours, so the second ping lands
-  inside the first window and does nothing.
-- **A timezone without DST needs only one cron entry.** Keep the guard anyway.
+  which the workflow's `date -d "today H:00"` lookup does not handle.
+- **Targets closer than 5 hours overlap.** The second ping lands inside the first window and does
+  nothing. The script warns; it is not fatal, just pointless.
+- **A timezone without DST needs only one cron entry.** That is handled automatically.
 
-After editing, sanity-check that the file still parses and the guard still lines up:
+### Applying the change
+
+Let the script write it. There are four coupled places — the headline comment, the `on:` cron
+entries, the job's `TZ` / `TARGET_HOURS`, and the season guard's `case` — and getting three of
+four right produces a workflow that looks correct and silently never fires:
 
 ```bash
-ruby -ryaml -e 'YAML.load_file(".github/workflows/refresh.yml"); puts "YAML ok"'
-grep -nE "cron: '|expected=" .github/workflows/refresh.yml
+python3 .claude/skills/start/schedule.py <IANA_TZ> --apply [hours...]
 ```
 
-Every `cron:` string must appear verbatim in exactly one `expected=` arm.
+It refuses to write unless the result comes out self-consistent, so a failure leaves the file
+untouched. Confirm afterwards, and check the workflow still parses:
+
+```bash
+python3 .claude/skills/start/schedule.py --show
+ruby -ryaml -e 'YAML.load_file(".github/workflows/refresh.yml"); puts "YAML ok"'
+```
+
+If the user would rather paste the blocks themselves, the same command without `--apply` prints
+them instead of writing.
+
+### Changing a schedule that is already live
+
+Say these three things — they are what people get wrong:
+
+1. **It takes effect only once it reaches the default branch.** An edit sitting on a branch
+   changes nothing.
+2. **A job already sleeping keeps its old target.** If a run is mid-sleep when the change lands,
+   it still pings at the hour it woke up for. The new times start from the next cron.
+3. **Old log lines keep the old hours.** That is history, not drift — leave it.
+
+Then go to Phase 7 and hand over the new times concretely.
 
 ## Phase 3 — the token secret
 
@@ -285,7 +323,8 @@ not talk the user into a test that a two-minute follow-up question would invalid
 | Ping step fails on authentication | token expired, wrong secret name, or secret never set | user re-runs `claude setup-token` + `gh secret set`; confirm the name is exactly `CLAUDE_CODE_OAUTH_TOKEN` |
 | Run is green but no ping, summary says "no nearby target" | dispatched outside the band | re-run inside a slot, use `--check` |
 | Run is green but no ping, summary says "out-of-season cron" | correct behaviour — the other cron entry handles this season | nothing to fix |
-| Every scheduled run says "out-of-season cron" | `cron:` entries and the guard's `case` arms drifted apart | re-run `schedule.py` and apply all three blocks |
+| Every scheduled run says "out-of-season cron" | `cron:` entries and the guard's `case` arms drifted apart | `--show` to confirm, then `--apply` to rewrite all four places at once |
+| Windows open at the wrong hour after a timezone or DST change | `TZ` and the cron entries disagree | `--show`, then `--apply` with the right timezone |
 | Scheduled runs never fire | workflow not on the default branch, or schedule not registered yet | Phase 4; wait up to an hour |
 | Scheduled runs stopped after ~60 days | GitHub disables schedules on inactive public repos | the log commit normally prevents this; re-enable in the Actions tab |
 | Window opens late, log says a big delay | GitHub cron delay exceeded the 30-minute head start | move the cron earlier and raise `EARLY_S` to match (see README, "Widening the buffer") |
