@@ -13,6 +13,12 @@ a detail**.
 
 ## Quick start
 
+**Using Claude Code?** Run `/start` in this repo and it walks you through everything below,
+checking as it goes what is already done. It also computes the cron entries for your timezone,
+which is the one step that is easy to get wrong by hand.
+
+Otherwise, by hand:
+
 ```
 ┌──────────────────────────────────────────────────────────────────────────┐
 │  1. Fork this repo — keep it PUBLIC (scheduled runs sleep, and Actions   │
@@ -144,7 +150,15 @@ Nothing else changes — the workflow always reads `secrets.CLAUDE_CODE_OAUTH_TO
 
 ## Changing the schedule
 
-The times live in more than one place and must be kept in sync:
+Let the helper compute it — the UTC conversion plus DST is exactly where hand-editing goes
+wrong:
+
+```bash
+python3 .claude/skills/start/schedule.py America/New_York 8 13 18 23
+```
+
+It prints the three blocks to paste, and refuses target hours that the workflow cannot handle.
+For reference, the times live in more than one place and must be kept in sync:
 
 1. `TZ` and `TARGET_HOURS` in the job's `env` — your timezone and the local target hours
    (`8 13 18 23`);
