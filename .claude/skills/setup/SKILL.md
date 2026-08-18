@@ -79,26 +79,28 @@ This is both a setup step and the way to **change the hours later**. The repo sh
 
 ### Agreeing on the hours
 
-Show the user what is configured now (`--show`) and ask what they want instead. Useful things to
-tell them while they decide:
+**Ask one question: what hour does the user want their day to start?** Do not ask them to supply
+a list of four hours — a window is 5 hours long, so the start hour determines the rest, and
+`--from` derives it. `--from 8` is `8 13 18 23`; `--from 10` is `10 15 20 1`, wrapping into the
+next day.
 
-- **Each target anchors a 5-hour window**, so the hours are the *starts*: `8 13 18 23` gives
-  `8–13`, `13–18`, `18–23`, `23–04`.
-- **Four targets 5 hours apart tile the day with no overlap and no gap** except the one you
-  choose to leave. The stock layout leaves 04:00–08:00 unanchored on purpose, because nobody
-  needs the night pinned.
-- **Fewer targets is a legitimate choice.** Someone who only works mornings can run `8 13` and
-  leave the rest alone; the unanchored hours simply behave the way Claude Code does by default.
-- **They should be the hours the user wants to *start* working**, not round numbers for their own
-  sake. The whole value is knowing the boundary in advance.
+Show what is configured now (`--show`) first. Useful things to tell them while they decide:
 
-The script rejects or warns about the rest:
+- **The hour is when a window *opens*,** so it should be when they actually want to start
+  working, not a round number for its own sake. The whole value is knowing the boundary ahead.
+- **Four windows cover twenty hours,** so four hours are always left unanchored — by default the
+  stretch before the start hour, which is usually the night. Those hours simply behave the way
+  Claude Code does normally.
+- **Midnight cannot be a target,** so starts of **9, 14 and 19** lose one window and end up with
+  three and a wider gap. The script says so plainly and suggests shifting an hour either way; if
+  the user picks one of those, relay that and let them choose rather than silently accepting it.
 
-- **Targets must be 01:00 or later.** A 00:00 target puts the cron on the previous local day,
-  which the workflow's `date -d "today H:00"` lookup does not handle.
-- **Targets closer than 5 hours overlap.** The second ping lands inside the first window and does
-  nothing. The script warns; it is not fatal, just pointless.
-- **A timezone without DST needs only one cron entry.** That is handled automatically.
+Fewer windows than the cycle allows is still a legitimate choice — someone who only works
+mornings can pass an explicit `8 13`. Offer it if they ask for it; don't lead with it.
+
+The script handles the rest: targets closer than 5 hours get a warning (the second ping lands
+inside the first window and does nothing), and a timezone without DST gets a single cron entry
+automatically.
 
 ### Applying the change
 
@@ -107,8 +109,11 @@ entries, the job's `TZ` / `TARGET_HOURS`, and the season guard's `case` — and 
 four right produces a workflow that looks correct and silently never fires:
 
 ```bash
-python3 .claude/skills/setup/schedule.py <IANA_TZ> --apply [hours...]
+python3 .claude/skills/setup/schedule.py <IANA_TZ> --from <start_hour> --apply
 ```
+
+It prints the derived cycle and what it leaves unanchored before writing, so read that back to
+the user. For a schedule that is not a clean cycle, pass explicit hours instead of `--from`.
 
 It refuses to write unless the result comes out self-consistent, so a failure leaves the file
 untouched. Confirm afterwards, and check the workflow still parses:

@@ -10,6 +10,11 @@ Usage (run from the repo root):
 
 Example: python3 .claude/skills/setup/schedule.py America/New_York --apply 8 13 18 23
 
+--from <hour> replaces the list of hours with the cycle that hour implies:
+windows are 5 hours long, so one start hour gives the whole day. --from 8 is
+8 13 18 23; --from 10 is 10 15 20 1, wrapping past midnight into the next day.
+It works with every mode, so `<IANA_TZ> --from 10 --apply` is the usual way in.
+
 --show reads the schedule out of the workflow and checks that its four places
 still agree: TZ, TARGET_HOURS, the cron entries and the season-guard arms.
 
@@ -64,6 +69,53 @@ def offset_label(off: timedelta) -> str:
     total = int(off.total_seconds())
     sign = "+" if total >= 0 else "-"
     return f"{sign}{abs(total) // 3600:02d}{abs(total) % 3600 // 60:02d}"
+
+
+def cycle_from(start: int) -> tuple[list[int], bool]:
+    """The whole day's targets implied by one start hour, every WINDOW_H hours.
+
+    Windows are 5 hours long, so a start hour determines the rest: 8 gives
+    8 13 18 23, and 10 gives 10 15 20 1, wrapping into the next day. Four
+    targets cover twenty hours; the remaining four are left unanchored.
+
+    Returns (targets, dropped_midnight). A cycle landing on 00:00 — starts 9,
+    14 and 19 — cannot have that one target: its cron would fire at 23:30 the
+    previous local day, and the workflow resolves targets with `date -d "today
+    H:00"`, which only ever looks at the current local day. It is dropped.
+    """
+    hours = [(start + WINDOW_H * i) % 24 for i in range(24 // WINDOW_H)]
+    return [h for h in hours if h != 0], 0 in hours
+
+
+def describe_cycle(start: int, targets: list[int], dropped: bool) -> None:
+    """Print the windows a start hour produces, and what it leaves unanchored."""
+    print(f"Starting at {start}:00, one window every {WINDOW_H} hours:")
+    print(f"  targets {' '.join(str(h) for h in sorted(targets))}")
+    for hour in sorted(targets):
+        print(f"    {hour:02d}:00 → {(hour + WINDOW_H) % 24:02d}:00")
+
+    covered = {(h + i) % 24 for h in targets for i in range(WINDOW_H)}
+    gap = sorted(set(range(24)) - covered)
+    if gap:
+        runs: list[list[int]] = []
+        for hour in gap:
+            if runs and hour == runs[-1][-1] + 1:
+                runs[-1].append(hour)
+            else:
+                runs.append([hour])
+        # A gap straddling midnight comes out as two runs; join them back up.
+        if len(runs) > 1 and runs[0][0] == 0 and runs[-1][-1] == 23:
+            runs[-1].extend(runs.pop(0))
+        spans = ", ".join(f"{r[0]:02d}:00–{(r[-1] + 1) % 24:02d}:00" for r in runs)
+        print(f"  unanchored: {spans}")
+
+    if dropped:
+        print()
+        print(f"  Note: this cycle lands on 00:00, which cannot be scheduled — that")
+        print(f"  cron fires at 23:30 the previous local day, and the workflow only")
+        print(f"  looks for targets on the current one. It has been dropped, which is")
+        print(f"  why you get {len(targets)} targets instead of 4 and a wider gap.")
+        print(f"  Starting at {start - 1}:00 or {start + 1}:00 avoids midnight entirely.")
 
 
 def entries_for(zone: ZoneInfo, targets: list[int]) -> list[tuple[str, str]] | None:
@@ -384,12 +436,50 @@ def check_now(zone: ZoneInfo, tz_name: str, targets: list[int]) -> int:
     return 0
 
 
+def extract_from(args: list[str]) -> tuple[list[str], int | None]:
+    """Pull `--from H` (or `--from=H`) out of the arguments, before the flag split.
+
+    It has to come out first: its value is a bare number, which the positional
+    split below would otherwise read as a target hour.
+    """
+    rest: list[str] = []
+    raw: str | None = None
+    i = 0
+    while i < len(args):
+        if args[i] == "--from":
+            if i + 1 >= len(args):
+                raise ValueError("--from needs an hour, e.g. --from 8")
+            raw, i = args[i + 1], i + 2
+            continue
+        if args[i].startswith("--from="):
+            raw, i = args[i].split("=", 1)[1], i + 1
+            continue
+        rest.append(args[i])
+        i += 1
+
+    if raw is None:
+        return rest, None
+    if raw == "0" or raw == "00":
+        raise ValueError(
+            "--from takes a start hour between 1 and 23. A 00:00 start cannot be "
+            "scheduled: its cron would fire at 23:30 the previous local day."
+        )
+    if not raw.isdigit() or not 1 <= int(raw) <= 23:
+        raise ValueError(f"--from takes a start hour between 1 and 23, got {raw!r}.")
+    return rest, int(raw)
+
+
 def main() -> int:
     if len(sys.argv) < 2:
         print(__doc__.strip())
         return 2
 
-    args = sys.argv[1:]
+    try:
+        args, start = extract_from(sys.argv[1:])
+    except ValueError as exc:
+        print(exc)
+        return 2
+
     flags = {a for a in args if a.startswith("--")}
     positional = [a for a in args if not a.startswith("--")]
 
@@ -413,7 +503,15 @@ def main() -> int:
         print(__doc__.strip())
         return 2
 
-    targets = [int(h) for h in hour_args] or [8, 13, 18, 23]
+    if start is not None:
+        if hour_args:
+            print("Pass either --from <hour> or an explicit list of hours, not both.")
+            return 2
+        targets, dropped = cycle_from(start)
+        describe_cycle(start, targets, dropped)
+        print()
+    else:
+        targets = [int(h) for h in hour_args] or [8, 13, 18, 23]
 
     try:
         zone = ZoneInfo(tz_name)
