@@ -1,18 +1,18 @@
 name: refresh
 
-# Opens a Claude Code usage window at 08:00 / 13:00 / 18:00 / 23:00 (Europe/Rome).
+# Opens a Claude Code usage window by pinging the API with the subscription token.
 #
-# GitHub Actions cron is not punctual (15+ minute delays are normal), so the job starts
-# 30 minutes BEFORE the target and sleeps until the exact second: the delay is absorbed by
-# the buffer instead of propagating into the window's start time.
+# The schedule deliberately does NOT live here. An external cron (cron-job.org) POSTs a
+# workflow_dispatch at 08:00 / 13:00 / 18:00 / 23:00 Europe/Rome; GitHub only executes.
+# GitHub's own `schedule` queue is not used because it degraded to 2-4 hour delays with
+# dropped firings — see docs/archive/2026-09-03-scheduler-migration.md.
 #
-# Actions cron is UTC-only and does not know about daylight saving time, so two sets of
-# entries are needed. The out-of-season one is discarded by the season guard in step 1.
+# Consequences worth knowing before editing this file:
+#   - To change the hours, edit the crontab on cron-job.org. Nothing here encodes them.
+#   - DST needs no handling: the external cron resolves Europe/Rome itself.
+#   - Dispatch arrives within seconds of the hour, so there is no buffer and no sleep.
 
 on:
-  schedule:
-    - cron: '30 6,11,16,21 * * *'   # UTC+0100 -> 7:30/12:30/17:30/22:30 local
-    - cron: '30 5,10,15,20 * * *'   # UTC+0200 -> 7:30/12:30/17:30/22:30 local
   workflow_dispatch:
 
 permissions:
@@ -25,143 +25,68 @@ concurrency:
 jobs:
   refresh:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 10
     env:
       TZ: Europe/Rome
-      TARGET_HOURS: '8 13 18 23'
-      # Buffer: how late (LATE_S) or how early (EARLY_S) the cron may fire relative to the
-      # target and still anchor that window.
-      EARLY_S: '2700'   # 45 min in the future -> the job sleeps until the target
-      LATE_S: '3600'    # 60 min in the past   -> the job pings right away and logs the delay
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Resolve target
-        id: target
-        env:
-          EVENT_SCHEDULE: ${{ github.event.schedule }}
-        run: |
-          set -euo pipefail
-
-          # --- Season guard ----------------------------------------------------
-          # Half the cron entries must do nothing, depending on the season.
-          # github.event.schedule tells which entry triggered this run; compare it
-          # against the current UTC offset of the configured TZ.
-          offset=$(date +%z)
-          case "$offset" in
-            +0100) expected='30 6,11,16,21 * * *' ;;
-            +0200) expected='30 5,10,15,20 * * *' ;;
-            *)     expected='' ;;
-          esac
-          if [ -n "${EVENT_SCHEDULE:-}" ] && [ -n "$expected" ] && [ "$EVENT_SCHEDULE" != "$expected" ]; then
-            echo "Out-of-season cron ('$EVENT_SCHEDULE', local offset $offset): exiting."
-            echo "proceed=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          # --- Target lookup ---------------------------------------------------
-          # First target hour falling between -LATE_S and +EARLY_S from now.
-          # Targets are at least 5 hours apart, so at most one can qualify.
-          now=$(date +%s)
-          target=""; delta=""
-          for h in $TARGET_HOURS; do
-            t=$(date -d "today ${h}:00:00" +%s)
-            d=$(( t - now ))
-            if [ "$d" -ge "-$LATE_S" ] && [ "$d" -le "$EARLY_S" ]; then
-              target=$t; delta=$d; break
-            fi
-          done
-
-          if [ -z "$target" ]; then
-            echo "No nearby target (local time $(date '+%F %T %Z')): exiting."
-            echo "proceed=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          # The nominal cron fires 30 minutes before the target, so whatever is missing
-          # from those 30 minutes is delay accumulated by GitHub.
-          delay_s=$(( 1800 - delta ))
-          if [ "$delay_s" -lt 0 ]; then delay_s=0; fi
-
-          {
-            echo "proceed=true"
-            echo "target=$target"
-            echo "delay_min=$(( delay_s / 60 ))"
-            echo "target_label=$(date -d "@$target" '+%F %H:%M')"
-            echo "expiry_label=$(date -d "@$(( target + 5 * 3600 ))" '+%H:%M')"
-            echo "month=$(date -d "@$target" '+%Y-%m')"
-          } >> "$GITHUB_OUTPUT"
-
-          echo "Target: $(date -d "@$target" '+%F %H:%M:%S %Z') (in ${delta}s, cron delay $(( delay_s / 60 )) min)"
-
-      # Node and the CLI are installed BEFORE the sleep: on wake-up the ping fires
-      # immediately, without ~20s of npm install shifting the window's start time.
       - name: Install Claude Code
-        if: steps.target.outputs.proceed == 'true'
         run: |
           set -euo pipefail
           npm i -g @anthropic-ai/claude-code
           claude --version
 
-      - name: Wait for the exact hour
-        if: steps.target.outputs.proceed == 'true'
-        env:
-          TARGET: ${{ steps.target.outputs.target }}
-        run: |
-          set -euo pipefail
-          remaining=$(( TARGET - $(date +%s) ))
-          if [ "$remaining" -gt 0 ]; then
-            echo "Sleeping ${remaining}s until $(date -d "@$TARGET" '+%H:%M:%S %Z')."
-            sleep "$remaining"
-          else
-            echo "Target already passed by $(( -remaining ))s: proceeding now."
-          fi
-
       - name: Ping
         id: ping
-        if: steps.target.outputs.proceed == 'true'
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
         run: |
           set -euo pipefail
+          # Recorded before the call, so a failed ping still reports when it was attempted.
+          echo "at=$(date +%s)" >> "$GITHUB_OUTPUT"
           echo "Pinging at $(date '+%F %H:%M:%S %Z')."
           claude -p --model haiku --safe-mode --no-session-persistence "Reply with just: ok"
 
       - name: Log + commit
-        if: always() && steps.target.outputs.proceed == 'true'
+        if: always()
         env:
-          MONTH: ${{ steps.target.outputs.month }}
-          TARGET_LABEL: ${{ steps.target.outputs.target_label }}
-          EXPIRY: ${{ steps.target.outputs.expiry_label }}
-          DELAY_MIN: ${{ steps.target.outputs.delay_min }}
           PING_OUTCOME: ${{ steps.ping.outcome }}
-          TRIGGER: ${{ github.event_name }}
+          PING_AT: ${{ steps.ping.outputs.at }}
         run: |
           set -euo pipefail
 
-          if [ "$TRIGGER" = "schedule" ]; then
-            note="cron ${DELAY_MIN} min late"
-          else
-            note="manual run"
-          fi
+          # The window is anchored by the ping, so everything is derived from when the ping
+          # actually happened — never from a target this file assumes. Targets are NOT on the
+          # hour (they are staggered 5h01m apart), so rounding to the hour here would be wrong.
+          ping_at="${PING_AT:-$(date +%s)}"
+          target=$(( ping_at - ping_at % 60 ))   # floor to the minute
+
+          # The cron fires on a whole minute, so the seconds in the ping timestamp ARE the
+          # trigger delay. Health metric: it should read well under :60. A label that matches
+          # no scheduled minute means the delay exceeded a minute and pushed it into the next.
+          target_label=$(date -d "@$target" '+%F %H:%M')
+          ping_label=$(date -d "@$ping_at" '+%H:%M:%S')
+          expiry=$(date -d "@$(( target + 5 * 3600 ))" '+%H:%M')
+          month=$(date -d "@$target" '+%Y-%m')
 
           if [ "$PING_OUTCOME" = "success" ]; then
-            line="${TARGET_LABEL} — window opened (${note}) → expires ${EXPIRY}"
+            line="${target_label} — window opened (ping ${ping_label}) → expires ${expiry}"
           else
-            line="${TARGET_LABEL} — PING FAILED (${note}) → no window opened"
+            line="${target_label} — PING FAILED (ping ${ping_label}) → no window opened"
           fi
 
           mkdir -p log
-          file="log/${MONTH}.md"
-          [ -f "$file" ] || printf '# %s\n\n' "$MONTH" > "$file"
+          file="log/${month}.md"
+          [ -f "$file" ] || printf '# %s\n\n' "$month" > "$file"
           printf '%s\n' "$line" >> "$file"
 
           {
             echo "### $line"
             echo
-            echo "- trigger: \`$TRIGGER\`"
-            echo "- ping outcome: \`${PING_OUTCOME:-skipped}\`"
+            echo "- ping outcome: \`$PING_OUTCOME\`"
+            echo "- ping at: \`$ping_label\`"
             echo "- log file: \`$file\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -172,7 +97,7 @@ jobs:
             echo "Nothing to commit."
             exit 0
           fi
-          git commit -m "log: ${TARGET_LABEL}"
+          git commit -m "log: ${target_label}"
 
           # Commits made with GITHUB_TOKEN do not re-trigger workflows: no loop.
           for attempt in 1 2 3; do
@@ -182,7 +107,3 @@ jobs:
           done
           echo "Push failed after 3 attempts." >&2
           exit 1
-
-      - name: Summary (no target)
-        if: steps.target.outputs.proceed != 'true'
-        run: echo "Nothing to do in this run (season guard, or no nearby target)." >> "$GITHUB_STEP_SUMMARY"

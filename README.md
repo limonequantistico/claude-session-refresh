@@ -13,236 +13,211 @@ start at 8 and you get `8–13`, `13–18`, `18–23`, `23–04`; start at 10 an
 always a four-hour stretch left unanchored — by default the one before your start hour, which
 is usually the night.
 
-The repo ships with `Europe/Rome` and a 08:00 start. Neither is special; see
-[Changing the schedule](#changing-the-schedule).
-
-## Quick start
-
-**Using Claude Code?** Run `/setup` in this repo and it walks you through everything below,
-checking as it goes what is already done. It also computes the cron entries for your timezone,
-which is the one step that is easy to get wrong by hand.
-
-Otherwise, by hand:
-
-```
-┌──────────────────────────────────────────────────────────────────────────┐
-│  1. Fork this repo — keep it PUBLIC (scheduled runs sleep, and Actions   │
-│     minutes are free and unlimited only on public repos).                │
-│                                                                          │
-│  2. Generate a subscription token and store it as a secret:              │
-│                                                                          │
-│        claude setup-token                                                │
-│        gh secret set CLAUDE_CODE_OAUTH_TOKEN --repo <you>/<repo>         │
-│                                                                          │
-│     `gh secret set` reads the value from stdin, so it never lands in     │
-│     your shell history. Never paste the token anywhere else.             │
-│                                                                          │
-│  3. Set your timezone and the hour your day starts. The helper works    │
-│     out the rest of the cycle and rewrites all four coupled places:      │
-│                                                                          │
-│        python3 .claude/skills/setup/schedule.py <TZ> --from 8 --apply    │
-│                                                                          │
-│     Drop `--apply` to preview. Check it any time with `--show`, which    │
-│     also flags drift.                                                    │
-│                                                                          │
-│  4. Get the workflow onto your default branch. A cron due within the     │
-│     hour after that may be missed — GitHub takes up to an hour to        │
-│     register a new schedule — but the next one fires normally.           │
-│                                                                          │
-│     Don't want to wait? Dispatch it:                                     │
-│                                                                          │
-│        gh workflow run refresh.yml                                       │
-│                                                                          │
-│     It only pings within -60/+45 min of a target hour, and it opens a    │
-│     real window — which spends the clean slate step 5 needs.             │
-│                                                                          │
-│  5. Verify — and mind the trap. The trigger opens a window only when     │
-│     none is open, and your own sessions open one too, including the      │
-│     one you set this up in. So test on a target at least 5 hours after   │
-│     your last message, typically the morning one before you touch        │
-│     anything, then run `/usage` in Claude Code. Reset must land on       │
-│     target+5h, on the round hour. A ragged time means your own           │
-│     activity anchored that window: inconclusive, not broken.             │
-└──────────────────────────────────────────────────────────────────────────┘
-```
+The repo ships with `Europe/Rome` and a 08:00 start. Neither is special.
 
 ## How it works
 
-A GitHub Actions workflow ([`.github/workflows/refresh.yml`](.github/workflows/refresh.yml))
-actually runs the `claude` CLI — not an HTTP POST — authenticating with the token from
-`claude setup-token`.
-
-### Why this way and not another
-
-- **It runs in the cloud, not on your Mac.** A local LaunchAgent is not a trigger: if the Mac is
-  off, nothing fires. The runner is GitHub Actions.
-- **It runs the CLI, not the API.** The OAuth token (`sk-ant-oat01-…`) authenticates your
-  subscription, which is what matters here: a regular API key would spend API credits and
-  **would not touch the 5-hour window at all**. That token, however, is only accepted by Claude
-  Code, not by the Messages API — which rules out Cloudflare Workers and any serverless runtime
-  without subprocesses.
-- **The repo is public.** The job sleeps (see below), and sleeping burns Actions minutes. On
-  private repos those minutes are metered (500/month on Free, 3000 on Pro), and four runs a day
-  with sleeps of up to half an hour add up to roughly 1900–3700 minutes a month — over budget.
-  On public repos the minutes are free and unlimited. Nothing sensitive lives in the code: the
-  token lives in GitHub secrets, and secrets are not passed to workflows from forks.
-
-### The core design: fire early **and** sleep
-
-GitHub Actions cron is not punctual: 15+ minute delays are normal (and got worse in February
-2026), and under load a run can be skipped entirely.
-
-Firing early on its own solves nothing: if the job runs at 7:30, the window opens at 7:30, the
-anchor just moves and the uncertainty is unchanged. The fix is to fire early **and make the job
-wait**:
-
-1. cron is scheduled **30 minutes before** each target (7:30 / 12:30 / 17:30 / 22:30 local, for
-   the shipped hours);
-2. the job resolves the upcoming target and **sleeps until the exact second**;
-3. only then does it ping.
-
-As long as GitHub's delay stays under 30 minutes — nearly always — the window opens at
-**8:00:0x sharp**: the delay is absorbed by the buffer instead of propagating into the time.
-
-For the same reason `npm i -g @anthropic-ai/claude-code` runs **before** the sleep: on wake-up
-the ping fires immediately, without twenty seconds of install shifting the window.
-
-### The steps
-
-| # | Step | What it does |
-|---|------|--------------|
-| 1 | Resolve target | Season guard, then finds the first of your `TARGET_HOURS` falling between −60 and +45 minutes from now. If there is none, the run exits cleanly. |
-| 2 | Install Claude Code | `npm i -g @anthropic-ai/claude-code`, before the sleep. |
-| 3 | Wait for the exact hour | `sleep` until the target second. If the target already passed, it proceeds immediately and records the delay. |
-| 4 | Ping | `claude -p --model haiku --safe-mode --no-session-persistence "Reply with just: ok"`. `--safe-mode` skips hooks/MCP/plugins, `--model haiku` keeps the cost negligible. |
-| 5 | Log + commit | Appends a line to `log/YYYY-MM.md` and commits it. |
-
-### The double cron and the season guard
-
-Actions cron is **UTC-only and knows nothing about daylight saving time**, so two sets of
-entries are required — here for the shipped Europe/Rome, 08:00 start:
-
-```yaml
-on:
-  schedule:
-    - cron: '30 6,11,16,21 * * *'   # UTC+0100 -> 7:30/12:30/17:30/22:30 local
-    - cron: '30 5,10,15,20 * * *'   # UTC+0200 -> 7:30/12:30/17:30/22:30 local
-  workflow_dispatch:
+```
+cron-job.org  ─ 4 jobs: 07:57 / 12:58 / 17:59 / 23:00, timezone Europe/Rome
+      │ POST workflow_dispatch
+      ▼
+GitHub Actions ─ install CLI → claude -p (Haiku) → append log → commit
 ```
 
-Half of those entries must do nothing, depending on the season — and the time window alone is
-not enough to discard them. In summer the winter entry fires at 8:30 local, and from there the
-08:00 target looks like it is 30 minutes in the past, i.e. within the tolerance for late crons.
-It would look like a delayed run, and it would ping.
+**The schedule lives outside GitHub, on purpose.** GitHub Actions is only the runner. Its own
+`schedule` queue is not used: in August 2026 it degraded from ~30-minute delays to 2–4 hours
+with runs dropped outright, which is a failure mode you cannot design around — see
+[the migration note](docs/archive/2026-09-03-scheduler-migration.md). `workflow_dispatch` skips
+that queue entirely and arrives within seconds.
 
-So the workflow compares `github.event.schedule` (the cron entry that triggered this run)
-against the current UTC offset of your configured `TZ`, and exits immediately when they
-disagree.
-Manual runs (`workflow_dispatch`) skip the check.
+Two things follow from this split, and they are the whole reason it is worth understanding:
 
-### The log
+- **The hours are not in this repo.** To change them, edit the crontab on cron-job.org. No
+  commit, no deploy, nothing to keep in sync.
+- **DST needs no handling anywhere.** cron-job.org resolves `Europe/Rome` itself, so there is no
+  UTC conversion and no seasonal switch to remember in October.
 
-Every successful run appends a line to `log/YYYY-MM.md`:
+The job runs about a minute. It pings with `--model haiku`, so the cost is negligible, and with
+`--safe-mode --no-session-persistence` so it skips hooks, MCP and plugins.
 
-```
-2026-08-17 08:00 — window opened (cron 4 min late) → expires 13:00
-```
+## Setup
 
-This serves two purposes at once:
+### 1. Keep the repo public
 
-- it is the **readable history of your windows**, and it also shows how late cron actually runs;
-- it **keeps the repo alive**: public repos get their scheduled workflows disabled after 60 days
-  of inactivity, and a commit a day makes that a non-issue.
+Actions minutes are free and unlimited on public repos with standard runners — verified here:
+`billable_ms = 0` on every run. Private would start metering them. Nothing sensitive lives in
+the code; the token is a GitHub secret, and secrets are not passed to fork workflows.
 
-Commits made with `GITHUB_TOKEN` do not re-trigger workflows, so there is no loop. The time and
-expiry also go into the run's step summary.
-
-## Rotating the token
-
-OAuth tokens expire. When the ping starts failing on authentication, run the same two commands
-again: `claude setup-token` issues a fresh token and `gh secret set` overwrites the old one.
-Nothing else changes — the workflow always reads `secrets.CLAUDE_CODE_OAUTH_TOKEN`.
-
-## Changing the schedule
-
-Nothing about the shipped `Europe/Rome` and 08:00 start is special. The only decision is **the
-hour you want your day to start**; since a window is 5 hours long, that fixes the whole cycle,
-wrapping into the next day when it has to:
+### 2. The token secret
 
 ```bash
-python3 .claude/skills/setup/schedule.py --show                             # what is set now
-python3 .claude/skills/setup/schedule.py America/New_York --from 10 --apply
+claude setup-token
+gh secret set CLAUDE_CODE_OAUTH_TOKEN --repo <owner>/<repo>
 ```
 
-`--from 10` becomes targets `10 15 20 1` — windows `10–15`, `15–20`, `20–01`, `01–06`, leaving
-`06:00–10:00` unanchored. It prints exactly that before it writes anything, so you can check the
-cycle is the one you wanted.
+It must be this token and not an API key. The `sk-ant-oat01-…` token authenticates **the
+subscription**, which is what moves the 5-hour window. An API key would spend API credits and
+leave the window untouched.
 
-`--apply` rewrites all four coupled places and refuses to write unless the result is
-self-consistent, so a failure leaves the file untouched. Drop `--apply` to print the blocks and
-paste them yourself. `--show` also works as a drift check: it exits non-zero if the four places
-disagree, and it is the only thing that catches a cron entry with no matching guard arm — an
-entry that looks fine and silently exits early on every single run.
+`gh secret set` reads from stdin, so the value never reaches your shell history.
 
-**Midnight is the one hour you cannot have.** A 00:00 target's cron fires at 23:30 the *previous*
-local day, and the workflow looks for targets with `date -d "today H:00"`, which only ever
-considers the current one. Starts of **9, 14 and 19** put a target on midnight; the script drops
-it and tells you, leaving three windows and a wider gap. Shifting the start an hour either way
-avoids it.
+### 3. The external cron
 
-### Hours that aren't a clean cycle
+Create **four** jobs at [cron-job.org](https://console.cron-job.org/jobs) — one per target.
+They cannot be collapsed into one: the minutes differ per hour, and a single expression like
+`57,58,59,0 7,12,17,23 * * *` is a cross product that would fire sixteen times a day.
 
-`--from` is the convenient path, not the only one. An explicit list still works, and is the way
-to run fewer windows than the day allows:
+| Crontab | Fires | Window |
+|---|---|---|
+| `57 7 * * *`  | 07:57 | → 12:57 |
+| `58 12 * * *` | 12:58 | → 17:58 |
+| `59 17 * * *` | 17:59 | → 22:59 |
+| `0 23 * * *`  | 23:00 | → 04:00 |
 
-```bash
-python3 .claude/skills/setup/schedule.py America/New_York --apply 8 13
+**Why the ragged minutes** — this is the one non-obvious thing in the project, see
+[Why the targets are staggered](#why-the-targets-are-staggered).
+
+Every job is otherwise identical:
+
+| Field | Value |
+|---|---|
+| URL | `https://api.github.com/repos/<owner>/<repo>/actions/workflows/refresh.yml/dispatches` |
+| Method | `POST` |
+| Schedule | Custom → the crontab from the table above |
+| Time zone | `Europe/Rome` |
+| Request body | `{"ref":"main"}` |
+| Save responses in job history | **on** — you will want the body when something fails |
+
+Headers:
+
+```
+Authorization: Bearer <PAT>
+Accept: application/vnd.github+json
+X-GitHub-Api-Version: 2022-11-28
+Content-Type: application/json
 ```
 
-That anchors mornings only and leaves the rest of the day behaving the way Claude Code does
-normally. The script rejects targets before 01:00, and warns when two are less than 5 hours
-apart — the second ping would land inside the first window and do nothing.
+The PAT is a **fine-grained** token, scoped to this repo only, with `Actions: Read and write`
+(plus the mandatory read-only `Metadata`). That is the whole blast radius: with it, someone can
+trigger this workflow and nothing else.
 
-Changing a live schedule takes effect only once it reaches the default branch, and a job that is
-already sleeping keeps its old target — the new times start from the next cron.
+Turn on cron-job.org's failure notifications — they are the only thing watching the trigger.
 
-For reference, the four places, if you would rather do it by hand:
+The PAT is duplicated across all four jobs, so **rotating it means editing four places.** That is
+the cost of the stagger. Enable 2FA on the cron-job.org account: anyone with access to it reads
+that token in clear text.
 
-1. `TZ` and `TARGET_HOURS` in the job's `env` — your timezone and the local target hours
-   (e.g. `8 13 18 23`);
-2. the `cron` entries, which must be **30 minutes before** each target: one set for your winter
-   UTC offset, one for your summer offset (a single entry is enough if your timezone has no
-   DST);
-3. the cron strings inside the season guard (`expected=`), compared literally — if you change
-   the `cron` entries, change these too, or the unguarded entry exits early on every run;
-4. the headline comment at the top of the file, which restates the schedule in prose and is the
-   first thing to go stale.
+**Success is `204 No Content` with an empty body.** A `404` means the token or its permissions,
+not a wrong URL: GitHub masks `403` as `404` on this endpoint so it does not reveal whether the
+repo exists.
 
-## Widening the buffer
+## Why the targets are staggered
 
-The buffer is two variables in the job's `env`:
+A window lasts exactly 5 hours. If the targets were exactly 5 hours apart, the system would only
+re-anchor about half the time — and the reason is worth understanding before changing anything.
 
-- `EARLY_S` (default `2700`, 45 min) — how far in the future a target may be for the job to wait
-  for it by sleeping;
-- `LATE_S` (default `3600`, 60 min) — how far in the past a target may be for the job to ping it
-  anyway, late.
+A ping does not land at its target. Measured on a real run: the cron fires at `23:00:00`,
+cron-job.org's dispatch reaches GitHub at `23:00:44`, the job starts and the ping goes out around
+`23:00:56`. Call that total delay `L`. So the window opened by ping N actually expires at
+`target + L_N + 5h`, while ping N+1 arrives at `target + 5h + L_{N+1}`. A new window opens only
+if:
 
-To harden against longer delays, move the cron earlier (45 or 60 minutes instead of 30) and
-raise `EARLY_S` to match. It only costs Actions minutes, which are free on a public repo. Avoid
-raising `LATE_S` far beyond the cron's head start: the wider it gets, the more the season guard
-is left doing all the work on its own.
+```
+L_{N+1} > L_N
+```
+
+**A ping re-anchors only when its run is slower than the previous one.** When it is faster, it
+lands inside the window still open and silently does nothing. With targets exactly 5 hours apart
+that is close to a coin flip on every hop.
+
+Note that firing the whole schedule a minute early does **not** fix this — it shifts all four
+targets equally and leaves the comparison between consecutive runs untouched. What fixes it is
+spacing the targets **5h01m** apart instead of 5h00m, which is what the ragged minutes above do.
+That buys 60 seconds of margin per hop, and since the observed delay is around 55 seconds it
+cannot drop by more than that.
+
+The chain also resets itself every night: the 23:00 window expires at 04:00, so the morning ping
+always lands on a clean slate regardless of what happened the day before.
+
+## Changing the hours
+
+Edit the crontabs on cron-job.org. That is it — nothing in this repo encodes them.
+
+Worth knowing while you pick:
+
+- **The hour is when a window *opens*,** so make it when you actually want to start working, not
+  a round number for its own sake. The value is knowing the boundary in advance.
+- **Space targets 5h01m apart, not 5h00m** — see above. Closer than 5 hours and the ping lands
+  inside the previous window and does nothing at all.
+- **Four windows cover twenty hours,** so four are always left unanchored. Those hours just
+  behave the way Claude Code normally does.
+
+## The log
+
+Every run appends a line to `log/<YYYY-MM>.md` and commits it:
+
+```
+2026-09-04 07:57 — window opened (ping 07:57:55) → expires 12:57
+```
+
+Everything on that line is derived from **when the ping actually happened**, never from a target
+the workflow assumes — it does not know the schedule, and the targets are not on the hour anyway.
+
+The seconds in the ping timestamp are the **trigger delay**, because the cron always fires on a
+whole minute: `07:57:55` means 55 seconds from cron to ping. That is the health metric. Watch for
+a label that matches **no scheduled minute** (`07:58` when the job fires at `07:57`) — that means
+the delay exceeded a minute and spilled into the next one, which is also when the 60-second
+stagger margin stops being enough.
+
+One caveat: the line says `window opened` whenever the ping succeeded, and the ping succeeds
+whether or not a window was already open. The log proves the plumbing ran, not that a new window
+was anchored. For that, see below.
+
+## Verifying that it actually moves the window
+
+Most attempts at this test are confounded, so it is worth doing deliberately.
+
+The trigger opens a window **only when none is already open**. Your own Claude Code sessions open
+one too, so if you have used Claude within 5 hours of the target, the ping correctly does nothing
+and `/usage` shows a reset that has nothing to do with the run. That is the design working.
+
+A valid test needs all three:
+
+1. **No window open when the ping fires** — your last Claude Code message more than 5 hours
+   before the target.
+2. **No usage between then and the target** — opening Claude Code and sending anything
+   re-anchors the window and ruins it.
+3. **A green run at that target**, confirmed in `log/`.
+
+The natural candidate is the first morning target, checked before touching anything else. Then:
+
+```
+/usage
+```
+
+- **Reset at exactly target + 5 hours, on the round hour** (08:00 → 13:00) — it works.
+- **Reset at a ragged time** (12:37) — that window was anchored by a human message. Inconclusive,
+  not broken. Retest.
+
+The round hour is the signature: a human's first message never lands at `:00`, the ping always
+does.
 
 ## Known risks
 
-- **Delays beyond 30 minutes.** Rare, but real. The buffer absorbs up to half an hour; past
-  that, the window opens late and the log says so. If GitHub skips a scheduled run entirely,
-  that window simply is not anchored.
-- **If you use Claude shortly before a target**, a window starts right there and the target's
-  ping falls inside it and does nothing; the system realigns at the following target. That is a
-  property, not a bug: the trigger opens a window only when none is already open.
-- **The token expires** and has to be rotated by hand (see above).
+- **The external cron is a single point of failure.** If cron-job.org is down or the job gets
+  disabled after repeated failures, nothing fires and nothing here notices. Their failure
+  notifications are the safety net — keep them on.
+- **The PAT** can be revoked or expire. Symptom: `404` in the cron-job.org history and no runs on
+  GitHub at all.
+- **The OAuth token** expires and has to be rotated by hand (`claude setup-token`, then
+  `gh secret set`). Symptom: runs appear but the log says `PING FAILED`.
+- **If you use Claude shortly before a target**, that target's ping falls inside the window you
+  already opened and does nothing. The system realigns at the next target. Property, not bug.
 
-## Out of scope in v1
+## References
 
-Push notifications (ntfy/Telegram). With the Mac off a macOS notification is pointless, and the
-value is already in knowing the times in advance.
+- **[cron-job.org console](https://console.cron-job.org/jobs)** — the trigger. Job
+  `claude-refresh`.
+- **[Workflow runs](https://github.com/limonequantistico/claude-session-refresh/actions)**
+- **[Migration note, 2026-09-03](docs/archive/2026-09-03-scheduler-migration.md)** — why the
+  schedule left GitHub, and what was deleted.
