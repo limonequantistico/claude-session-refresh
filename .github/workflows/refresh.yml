@@ -18,9 +18,10 @@ on:
 permissions:
   contents: write
 
-concurrency:
-  group: refresh
-  cancel-in-progress: false
+# No concurrency group, on purpose. A run lasts ~20s and targets are 5h apart, so runs never
+# overlap. A group only hurts: on 2026-09-12 one job waited 24h for a runner that never came,
+# and every dispatch behind it was queued and then cancelled — 4 windows lost instead of 1.
+# The log step already survives parallel pushes via its rebase-and-retry loop.
 
 jobs:
   refresh:
